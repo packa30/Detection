@@ -166,10 +166,18 @@ def evaluate(model, content, ground, intervals):
     # conf_mat = confusion_matrix(ground, predicted)
     tn, fp, fn, tp = confusion_matrix(ground, predicted).ravel()
 
-    detected = []
+    detected_flood = []
     for i in range(0, len(predicted) - 1):
         if predicted[i] != ground[i] and predicted[i + 1] != ground[i + 1]:
-            detected.append(intervals[i])
+            detected_flood.append(intervals[i])
+    detected = []
+    if detected_flood:
+        actual = detected_flood[0]
+        detected.append(actual)
+        for i in range(1, len(detected_flood)):
+            if actual != detected_flood[i]:
+                actual = detected_flood[i]
+                detected.append(detected_flood[i])
 
     if detected:
         anomaly = []
@@ -192,9 +200,11 @@ def evaluate(model, content, ground, intervals):
     accuracy = (tp + tn) / (tp + tn + fp + fn) * 100
     print("Model accuracy:\t" + str(accuracy))
 
+    return detected
 
-DETECTION_DEVICES = ["HMI", "RTU"]
-# DETECTION_DEVICE = "HMI"    # incoming communication from RTU
+
+# DETECTION_DEVICES = ["HMI", "RTU"]
+DETECTION_DEVICES = ["HMI"]    # incoming communication from RTU
 # ATTACKS = ["REPLAY", "ATTRIBUTE_CHANGE", "REPORT_BLOCK", "MASQUERADING"]
 ATTACKS = ["REPORT_BLOCK"]
 # ATTACKS = []
@@ -236,6 +246,7 @@ for ATTACK in ATTACKS:
             svm_model = OneClassSVM(kernel='rbf', gamma=0.001, nu=0.07)
             svm_window = 500
         elif ATTACK == "REPORT_BLOCK":
+            svm_window = 1800
             WINDOW = 500
             if DETECTION_DEVICE == "HMI":
                 print("------------------------------------------------------------------------")
@@ -340,58 +351,43 @@ rep_block_test = []
 rep_block_anomaly = []
 
 
-def types_data_switch(content, content_types):
-    new_dataset = []
-    for i in range(0, len(content_types)):
-        for j in range(0, len(content_types[i])):
-            if content_types[i][j].isdigit():
-                new_dataset.append([int(content_types[i][j]), content[i][0]])
-    return new_dataset
+def types_data_switch(content):
+    data = []
+    start = float(content[0][1])
+    intervals = []
+    types_in_window = []
+    for i in range(1, len(content)):
+        if float(content[i][1]) > start + WINDOW:
+            for type in types_in_window:
+                intervals.append([start, start + WINDOW])
+                data.append(type)
+            types_in_window = []
+            start += WINDOW
+        if content[i][10].isdigit():
+            find = False
+            for j in range(0, len(types_in_window)):
+                if types_in_window[j][0] == float(content[i][10]):
+                    find = True
+                    types_in_window[j][1] += 1
+            if not find:
+                types_in_window.append([float(content[i][10]), 1])
+
+    return data, intervals
 
 
-svm_model = OneClassSVM(kernel='rbf', gamma=0.1, nu=0.015)
-rep_block_train = types_data_switch(s_data, r2h_train_types)
-rep_block_test = types_data_switch(test_data, r2h_test_types)
-rep_block_anomaly = types_data_switch(a_data, r2h_attack_types)
+svm_model = OneClassSVM(kernel='rbf', gamma=0.001, nu=0.02)
+rep_block_train, rep_block_train_intervals = types_data_switch(r2h_train)
+# print(rep_block_train)
+rep_block_test, rep_block_test_intervals = types_data_switch(r2h_train)
+rep_block_anomaly, rep_block_anomaly_intervals = types_data_switch(attack_r2h)
 
-
-# for i in range(0, len(s_data)):
-#     count = 0
-#     types = 0
-#     for j in range(0, len(r2h_train_types[i])):
-#         if r2h_train_types[i][j].isdigit():
-#             count += 1
-#             types += int(r2h_train_types[i][j])
-#     rep_block_train.append([s_data[i][0], types/count])
-#
-# for i in range(0, len(test_data)):
-#     count = 0
-#     types = 0
-#     for j in range(0, len(r2h_test_types[i])):
-#         if r2h_test_types[i][j].isdigit():
-#             count += 1
-#             types += int(r2h_test_types[i][j])
-#     rep_block_test.append([test_data[i][0], types/count])
-#
-# for i in range(0, len(a_data)):
-#     count = 0
-#     types = 0
-#     for j in range(0, len(r2h_attack_types[i])):
-#         if r2h_attack_types[i][j].isdigit():
-#             count += 1
-#             types += int(r2h_attack_types[i][j])
-#     rep_block_anomaly.append([a_data[i][0], types/count])
 
 svm_model.fit(rep_block_train)
+ground_truth = np.full(len(rep_block_test), 1)
+evaluate(svm_model, rep_block_test, ground_truth, rep_block_test_intervals)
 
-ground_truth = np.full(len(test_data), 1)
-evaluate(svm_model, rep_block_test, ground_truth, intervals_r2h_test)
-
-ground_truth = np.full(len(a_data), 1)
-evaluate(svm_model, rep_block_anomaly, ground_truth, intervals_attack_r2h)
-
-# print(rep_block_train)
-# print(rep_block_test)
+ground_truth = np.full(len(rep_block_anomaly), 1)
+det = evaluate(svm_model, rep_block_anomaly, ground_truth, rep_block_anomaly_intervals)
 
 #######################################################
 
